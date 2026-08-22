@@ -66,22 +66,20 @@ jobs:
             ls -lh dist/*.img
           fi
 
-      # Attach this variant’s files to the GitHub Release, but DO NOT set the body here.
-      # We use draft: true so the release isn’t published until the final job.
       - name: Attach ${{ matrix.variant }} assets to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ADeUX ${{ github.ref_name }}
           files: dist/*.7z.*
-          body: ""  # intentionally empty; body will be set by finalize-release
+          body: ""
           draft: true
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   finalize-release:
-    name: Finalize release (edit body only)
+    name: Finalize release
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
@@ -93,12 +91,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      # We do NOT download the big .7z.* artifacts here.
-      # The device table is generated from config.env only.
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: darkos-*-7z
+          merge-multiple: true
+          path: dist
 
-      - name: Generate release notes (from config, no big downloads)
+      - name: Generate release notes
         run: |
-          set -x
           source config.env
 
           release_date="$(date -u +%Y/%m/%d)"
@@ -109,38 +110,20 @@ jobs:
             label="${vlabel:-${vname}}"
             display="${vdisplay:-${label//_/ / }}"
 
-            # We assume the files uploaded by the build jobs follow this pattern:
-            # ${MOD_PREFIX}${label}_${MOD_SUFFIX}.7z.001, .002, ...
-            # We don’t scan dist/; we just construct links based on expected names.
-            #
-            # If you know you always have at least .7z.001, you can link that,
-            # and tell users to download all parts from the Assets list.
-
             base_name="${MOD_PREFIX}${label}_${MOD_SUFFIX}"
 
-            # Example: link to the first part; users are expected to grab all .7z.* parts.
-            fname="${base_name}.7z.001"
-            link="[Download ${display}](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${fname})"
+            links=""
+            for i in 001 002 003 004; do
+              fname="${base_name}.7z.${i}"
+              if [[ -f "dist/${fname}" ]]; then
+                links+="[${fname}](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${fname}) "
+              fi
+            done
+            links="${links% }"
 
-            device_table+="| ${display} | ${release_date} | ${link} |"$'\n'
+            device_table+="| ${display} | ${release_date} | ${links} |"$'\n'
           done
           device_table="${device_table%$'\n'}"
-
-          new_features_default="- **Placeholder:** New features introduced in this release.
-          - **Placeholder:** Newly supported hardware or functionality.
-          - **Placeholder:** Major changes."
-
-          improvements_default="- **Placeholder:** Performance and stability improvements.
-          - **Placeholder:** Hardware-specific improvements.
-          - **Placeholder:** System and configuration improvements."
-
-          bug_fixes_default="- **Placeholder:** Fixes included in this release.
-          - **Placeholder:** Device-specific fixes.
-          - **Placeholder:** Other resolved issues."
-
-          known_issues_default="- **Placeholder:** Known issues for this release.
-          - **Placeholder:** Device-specific limitations.
-          - **Placeholder:** Other issues users should be aware of."
 
           declare -A wn=( [NEW_FEATURES]="" [IMPROVEMENTS]="" [BUG_FIXES]="" [KNOWN_ISSUES]="" [CHANGELOG]="" )
 
@@ -170,45 +153,61 @@ jobs:
             wn[${key}]="$(printf '%s' "${wn[${key}]}" | sed -e '/^[[:space:]]*$/d' -e '/^\*[[:space:]]*$/d')"
           done
 
-          new_features="${wn[NEW_FEATURES]:-${new_features_default}}"
-          improvements="${wn[IMPROVEMENTS]:-${improvements_default}}"
-          bug_fixes="${wn[BUG_FIXES]:-${bug_fixes_default}}"
-          known_issues="${wn[KNOWN_ISSUES]:-${known_issues_default}}"
+          new_features="${wn[NEW_FEATURES]}"
+          improvements="${wn[IMPROVEMENTS]}"
+          bug_fixes="${wn[BUG_FIXES]}"
+          known_issues="${wn[KNOWN_ISSUES]}"
           changelog_line="${wn[CHANGELOG]}"
-          changelog_stripped="$(printf '%s' "${changelog_line}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-          if [[ "${changelog_stripped}" == "fullchangelog:" || -z "${changelog_stripped}" ]]; then
-            changelog_line=""
-          fi
 
-          if [[ -z "${changelog_line}" ]]; then
+          changelog_trimmed="$(printf '%s' "${changelog_line}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+          if [[ -z "${changelog_trimmed}" ]]; then
             prev_tag="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
             if [[ -n "${prev_tag}" ]]; then
-              changelog_line="**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${prev_tag}...${GITHUB_REF_NAME}"
+              changelog_line="**Full Changelog**: [https://github.com/${GITHUB_REPOSITORY}/compare/${prev_tag}...${GITHUB_REF_NAME}](https://github.com/${GITHUB_REPOSITORY}/compare/${prev_tag}...${GITHUB_REF_NAME})"
+            else
+              changelog_line="**Full Changelog**: [https://github.com/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME}](https://github.com/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME})"
             fi
           fi
 
           template="$(cat .github/release-notes.md)"
           template="${template//\{\{DEVICE_TABLE\}\}/${device_table}}"
-          template="${template//\{\{NEW_FEATURES\}\}/${new_features}}"
-          template="${template//\{\{IMPROVEMENTS\}\}/${improvements}}"
-          template="${template//\{\{BUG_FIXES\}\}/${bug_fixes}}"
-          template="${template//\{\{KNOWN_ISSUES\}\}/${known_issues}}"
+
+          if [[ -n "${new_features}" ]]; then
+            template="${template//\{\{NEW_FEATURES\}\}/${new_features}}"
+          else
+            template="$(printf '%s' "${template}" | sed '/### New Features/,/^$/d')"
+          fi
+
+          if [[ -n "${improvements}" ]]; then
+            template="${template//\{\{IMPROVEMENTS\}\}/${improvements}}"
+          else
+            template="$(printf '%s' "${template}" | sed '/### Improvements/,/^$/d')"
+          fi
+
+          if [[ -n "${bug_fixes}" ]]; then
+            template="${template//\{\{BUG_FIXES\}\}/${bug_fixes}}"
+          else
+            template="$(printf '%s' "${template}" | sed '/### Bug Fixes/,/^$/d')"
+          fi
+
+          if [[ -n "${known_issues}" ]]; then
+            template="${template//\{\{KNOWN_ISSUES\}\}/${known_issues}}"
+          else
+            template="$(printf '%s' "${template}" | sed '/## Known Issues/,/^---$/d')"
+          fi
+
           template="${template//\{\{CHANGELOG_LINE\}\}/${changelog_line}}"
 
           printf '%s\n' "${template}" > RELEASE_NOTES.md
 
-          echo "=== Generated RELEASE_NOTES.md ==="
-          cat RELEASE_NOTES.md
-
-      # Update the existing release body only; do NOT upload files here.
-      - name: Update release body (finalize)
+      - name: Update release body
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ADeUX ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
-          draft: false  # publish the release now that all assets are attached
+          draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
-          # No `files` field: we’re only updating the body, not re-uploading assets.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
