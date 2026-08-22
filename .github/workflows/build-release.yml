@@ -129,17 +129,17 @@ jobs:
             links=""
 
             shopt -s nullglob
-            assets=(dist/"${base_name}".7z.*)
+            assets=(dist/"${base_name}".img.7z.*)
             shopt -u nullglob
 
             if [[ "${#assets[@]}" -eq 0 ]]; then
-              echo "ERROR: No archive parts found for ${display}: ${base_name}.7z.*" >&2
+              echo "ERROR: No archive parts found for ${display}: ${base_name}.img.7z.*" >&2
+              echo "Available archive files:" >&2
+              find dist -maxdepth 1 -type f -printf '%f\n' | sort >&2
               exit 1
             fi
 
             for asset_path in "${assets[@]}"; do
-              [[ -f "${asset_path}" ]] || continue
-
               fname="$(basename "${asset_path}")"
               url="${release_url}/${fname}"
               part="${fname##*.7z.}"
@@ -180,26 +180,11 @@ jobs:
               key="$(printf '%s' "${line}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[[:space:]]+$//; s/:$//')"
 
               case "${key}" in
-                "new features")
-                  current=NEW_FEATURES
-                  continue
-                  ;;
-                "improvements"|"updates")
-                  current=IMPROVEMENTS
-                  continue
-                  ;;
-                "bug fixes")
-                  current=BUG_FIXES
-                  continue
-                  ;;
-                "known issues")
-                  current=KNOWN_ISSUES
-                  continue
-                  ;;
-                "full changelog")
-                  current=CHANGELOG
-                  continue
-                  ;;
+                "new features") current=NEW_FEATURES; continue ;;
+                "improvements"|"updates") current=IMPROVEMENTS; continue ;;
+                "bug fixes") current=BUG_FIXES; continue ;;
+                "known issues") current=KNOWN_ISSUES; continue ;;
+                "full changelog") current=CHANGELOG; continue ;;
               esac
 
               [[ -n "${current}" ]] || continue
