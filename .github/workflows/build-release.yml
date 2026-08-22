@@ -62,21 +62,17 @@ jobs:
       - name: Check for leftover raw images
         run: |
           if ls dist/*.img >/dev/null 2>&1; then
-            echo "::warning::Raw .img still present in dist/ for ${{ matrix.variant }} — compress step may have been skipped"
+            echo "::warning::Raw .img still present in dist/ for ${{ matrix.variant }} — compression may have been skipped"
             ls -lh dist/*.img
           fi
 
-      - name: Attach ${{ matrix.variant }} assets to release
-        uses: softprops/action-gh-release@v2
+      - name: Upload generated archives for finalization
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ADeUX ${{ github.ref_name }}
-          files: dist/*.7z.*
-          body: ""
-          draft: true
-          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: darkos-${{ matrix.variant }}-7z
+          path: dist/*.7z.*
+          if-no-files-found: error
+          retention-days: 1
 
   finalize-release:
     name: Finalize release
@@ -91,66 +87,132 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download all artifacts
+      - name: Download all generated archives
         uses: actions/download-artifact@v4
         with:
           pattern: darkos-*-7z
           merge-multiple: true
           path: dist
 
-      - name: Generate release notes
+      - name: Verify generated archives
+        shell: bash
         run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*.7z.*)
+
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "ERROR: No .7z archive parts were downloaded into dist/" >&2
+            exit 1
+          fi
+
+          printf 'Found release asset: %s\n' "${files[@]}"
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
           source config.env
 
           release_date="$(date -u +%Y/%m/%d)"
+          release_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
 
           device_table=""
+
           for entry in "${MOD_VARIANTS[@]}"; do
             IFS=':' read -r vname vdtb vlabel vdisplay <<< "${entry}"
+
             label="${vlabel:-${vname}}"
             display="${vdisplay:-${label//_/ / }}"
-
             base_name="${MOD_PREFIX}${label}_${MOD_SUFFIX}"
-
             links=""
-            for i in 001 002 003 004; do
-              fname="${base_name}.7z.${i}"
-              if [[ -f "dist/${fname}" ]]; then
-                links+="[${fname}](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${fname}) "
-              fi
-            done
-            links="${links% }"
 
-            device_table+="| ${display} | ${release_date} | ${links} |"$'\n'
+            shopt -s nullglob
+            assets=(dist/"${base_name}".7z.*)
+            shopt -u nullglob
+
+            if [[ "${#assets[@]}" -eq 0 ]]; then
+              echo "ERROR: No archive parts found for ${display}: ${base_name}.7z.*" >&2
+              exit 1
+            fi
+
+            for asset_path in "${assets[@]}"; do
+              [[ -f "${asset_path}" ]] || continue
+
+              fname="$(basename "${asset_path}")"
+              url="${release_url}/${fname}"
+              part="${fname##*.7z.}"
+              links+="[.${part}](${url}) "
+            done
+
+            device_table+="| ${display} | ${release_date} | ${links% } |"$'\n'
           done
+
           device_table="${device_table%$'\n'}"
 
-          declare -A wn=( [NEW_FEATURES]="" [IMPROVEMENTS]="" [BUG_FIXES]="" [KNOWN_ISSUES]="" [CHANGELOG]="" )
+          declare -A wn=(
+            [NEW_FEATURES]=""
+            [IMPROVEMENTS]=""
+            [BUG_FIXES]=""
+            [KNOWN_ISSUES]=""
+            [CHANGELOG]=""
+          )
 
           whats_new_file=".github/whats-new.md"
+
           if [[ -f "${whats_new_file}" ]]; then
             current=""
+            in_comment=0
+
             while IFS= read -r line || [[ -n "${line}" ]]; do
-              key="$(printf '%s' "${line}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[[:space:]]+$//; s/:$//')"
-              case "${key}" in
-                "new features") current=NEW_FEATURES; continue ;;
-                "improvements"|"updates") current=IMPROVEMENTS; continue ;;
-                "bug fixes") current=BUG_FIXES; continue ;;
-                "known issues") current=KNOWN_ISSUES; continue ;;
-              esac
-              if [[ "${key}" == "full changelog"* ]]; then
-                current=CHANGELOG
-                wn[${current}]+="${line}"$'\n'
+              if [[ "${line}" == *"<!--"* ]]; then
+                in_comment=1
+              fi
+
+              if [[ "${in_comment}" -eq 1 ]]; then
+                if [[ "${line}" == *"-->"* ]]; then
+                  in_comment=0
+                fi
                 continue
               fi
-              if [[ -n "${current}" ]]; then
-                wn[${current}]+="${line}"$'\n'
-              fi
+
+              key="$(printf '%s' "${line}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[[:space:]]+$//; s/:$//')"
+
+              case "${key}" in
+                "new features")
+                  current=NEW_FEATURES
+                  continue
+                  ;;
+                "improvements"|"updates")
+                  current=IMPROVEMENTS
+                  continue
+                  ;;
+                "bug fixes")
+                  current=BUG_FIXES
+                  continue
+                  ;;
+                "known issues")
+                  current=KNOWN_ISSUES
+                  continue
+                  ;;
+                "full changelog")
+                  current=CHANGELOG
+                  continue
+                  ;;
+              esac
+
+              [[ -n "${current}" ]] || continue
+              [[ -z "${line//[[:space:]]/}" ]] && continue
+              [[ "${line}" == "- TEST NEW FEATURES" ]] && continue
+              [[ "${line}" == "- Placeholder" ]] && continue
+
+              wn["${current}"]+="${line}"$'\n'
             done < "${whats_new_file}"
           fi
 
           for key in "${!wn[@]}"; do
-            wn[${key}]="$(printf '%s' "${wn[${key}]}" | sed -e '/^[[:space:]]*$/d' -e '/^\*[[:space:]]*$/d')"
+            wn["${key}"]="$(printf '%s' "${wn[${key}]}" | sed '/^[[:space:]]*$/d')"
           done
 
           new_features="${wn[NEW_FEATURES]}"
@@ -163,52 +225,79 @@ jobs:
 
           if [[ -z "${changelog_trimmed}" ]]; then
             prev_tag="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+
             if [[ -n "${prev_tag}" ]]; then
-              changelog_line="**Full Changelog**: [https://github.com/${GITHUB_REPOSITORY}/compare/${prev_tag}...${GITHUB_REF_NAME}](https://github.com/${GITHUB_REPOSITORY}/compare/${prev_tag}...${GITHUB_REF_NAME})"
+              changelog_url="https://github.com/${GITHUB_REPOSITORY}/compare/${prev_tag}...${GITHUB_REF_NAME}"
             else
-              changelog_line="**Full Changelog**: [https://github.com/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME}](https://github.com/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME})"
+              changelog_url="https://github.com/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME}"
             fi
+
+            changelog_line="**Full Changelog**: [${changelog_url}](${changelog_url})"
           fi
 
           template="$(cat .github/release-notes.md)"
           template="${template//\{\{DEVICE_TABLE\}\}/${device_table}}"
 
+          remove_placeholder_section() {
+            local input="$1"
+            local heading="$2"
+            local placeholder="$3"
+
+            printf '%s\n' "${input}" | awk \
+              -v heading="${heading}" \
+              -v placeholder="${placeholder}" '
+                $0 == heading {
+                  skip=1
+                  next
+                }
+
+                skip && $0 == placeholder {
+                  skip=0
+                  next
+                }
+
+                !skip {
+                  print
+                }
+              '
+          }
+
           if [[ -n "${new_features}" ]]; then
-            template="${template//\{\{NEW_FEATURES\}\}/${new_features}}"
+            template="${template//\{\{NEW_FEATURES\}\}/${new_features%$'\n'}}"
           else
-            template="$(printf '%s' "${template}" | sed '/### New Features/,/^$/d')"
+            template="$(remove_placeholder_section "${template}" '### New Features' '{{NEW_FEATURES}}')"
           fi
 
           if [[ -n "${improvements}" ]]; then
-            template="${template//\{\{IMPROVEMENTS\}\}/${improvements}}"
+            template="${template//\{\{IMPROVEMENTS\}\}/${improvements%$'\n'}}"
           else
-            # Delete from "### Improvements" through the line containing {{IMPROVEMENTS}}
-            template="$(printf '%s' "${template}" | sed '/### Improvements/,/{{IMPROVEMENTS}}/d')"
+            template="$(remove_placeholder_section "${template}" '### Improvements' '{{IMPROVEMENTS}}')"
           fi
 
           if [[ -n "${bug_fixes}" ]]; then
-            template="${template//\{\{BUG_FIXES\}\}/${bug_fixes}}"
+            template="${template//\{\{BUG_FIXES\}\}/${bug_fixes%$'\n'}}"
           else
-            # Delete from "### Bug Fixes" through the line containing {{BUG_FIXES}}
-            template="$(printf '%s' "${template}" | sed '/### Bug Fixes/,/{{BUG_FIXES}}/d')"
+            template="$(remove_placeholder_section "${template}" '### Bug Fixes' '{{BUG_FIXES}}')"
           fi
 
           if [[ -n "${known_issues}" ]]; then
-            template="${template//\{\{KNOWN_ISSUES\}\}/${known_issues}}"
+            template="${template//\{\{KNOWN_ISSUES\}\}/${known_issues%$'\n'}}"
           else
-            template="$(printf '%s' "${template}" | sed '/## Known Issues/,/^---$/d')"
+            template="$(remove_placeholder_section "${template}" '## Known Issues' '{{KNOWN_ISSUES}}')"
           fi
 
           template="${template//\{\{CHANGELOG_LINE\}\}/${changelog_line}}"
+          template="$(printf '%s\n' "${template}" | sed -E '/^\{\{[A-Z_]+\}\}$/d')"
 
           printf '%s\n' "${template}" > RELEASE_NOTES.md
 
-      - name: Update release body
+      - name: Update release body and upload archives
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ADeUX
           body_path: RELEASE_NOTES.md
+          files: dist/*.7z.*
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
         env:

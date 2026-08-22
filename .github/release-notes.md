@@ -1,13 +1,7 @@
 <!--
   This is the RELEASE TEMPLATE — do not fill this one in by hand.
-  It's read by .github/workflows/build-release.yml, which substitutes the
-  {{PLACEHOLDER}} tokens below with content generated at build time
-  (device table) and with the sections you wrote in .github/whats-new.md
-  (New Features / Improvements / Bug Fixes / Known Issues / Full Changelog).
-
-  Edit this file only if you want to change the overall LAYOUT of the
-  release notes (add/remove sections, change wording, add links).
-  To change the CONTENT of a specific release, edit whats-new.md instead.
+  It is read by .github/workflows/build-release.yml, which substitutes the
+  {{PLACEHOLDER}} tokens below with generated release content.
 -->
 
 # ADeUX
@@ -73,4 +67,3 @@ Images and releases for ADeUX are published through this repository's [Releases]
 If you want to support the project and help us continue purchasing devices for development and testing, you can support ADeUX through Ko-fi:
 
 [![Support ADeUX on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R5R7TMKNX)
-</content>
