@@ -30,9 +30,9 @@
 New Features
 - TEST NEW FEATURES
 Improvements
-- TEST IMPROVEMENTS
+
 Bug Fixes
-- TEST BUG FIXES
+
 Known Issues
 
 Full Changelog
