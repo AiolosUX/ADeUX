@@ -72,5 +72,5 @@ Images and releases for ADeUX are published through this repository's [Releases]
 
 If you want to support the project and help us continue purchasing devices for development and testing, you can support ADeUX through Ko-fi:
 
-[![Support ADeUX on Ko-fi](https://camo.githubusercontent.com/201ef269611db7eb6b5d08e9f756ab8980df3014b64492770bdf13a6ed924641/68747470733a2f2f6b6f2d66692e636f6d2f696d672f676974687562627574746f6e5f736d2e737667)](https://ko-fi.com/A0A1J951S)
+[![Support ADeUX on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R5R7TMKNX)
 </content>
