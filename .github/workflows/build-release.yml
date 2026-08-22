@@ -66,65 +66,39 @@ jobs:
             ls -lh dist/*.img
           fi
 
-      - name: Upload ${{ matrix.variant }} artifact
-        uses: actions/upload-artifact@v4
+      # Attach this variant’s files to the GitHub Release, but DO NOT set the body here.
+      # We use draft: true so the release isn’t published until the final job.
+      - name: Attach ${{ matrix.variant }} assets to release
+        uses: softprops/action-gh-release@v2
         with:
-          name: darkos-${{ matrix.variant }}-7z
-          path: dist/*.7z.*
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 7
+          tag_name: ${{ github.ref_name }}
+          name: ADeUX ${{ github.ref_name }}
+          files: dist/*.7z.*
+          body: ""  # intentionally empty; body will be set by finalize-release
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  release:
-    name: Release ${{ matrix.variant }}
+  finalize-release:
+    name: Finalize release (edit body only)
     needs: build
-    if: always() && needs.build.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    timeout-minutes: 180
-
-    strategy:
-      fail-fast: false
-      matrix:
-        variant:
-          - R36S
-          - R36SPlus
-          - R45H
+    timeout-minutes: 30
 
     steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download ${{ matrix.variant }} artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: darkos-${{ matrix.variant }}-7z
-          path: dist
+      # We do NOT download the big .7z.* artifacts here.
+      # The device table is generated from config.env only.
 
-      - name: List downloaded artifacts
+      - name: Generate release notes (from config, no big downloads)
         run: |
-          echo "=== dist contents ==="
-          ls -lh dist/
-          echo "=== disk space ==="
-          df -h /
-
-      # Only the first variant generates the release notes and body.
-      # Other variants will just attach their files to the same release.
-      - name: Write release notes (first variant only)
-        if: matrix.variant == 'R36S'
-        run: |
+          set -x
           source config.env
 
           release_date="$(date -u +%Y/%m/%d)"
@@ -135,23 +109,20 @@ jobs:
             label="${vlabel:-${vname}}"
             display="${vdisplay:-${label//_/ / }}"
 
-            shopt -s nullglob
-            parts=( dist/"${MOD_PREFIX}${label}_${MOD_SUFFIX}".7z.* )
-            shopt -u nullglob
+            # We assume the files uploaded by the build jobs follow this pattern:
+            # ${MOD_PREFIX}${label}_${MOD_SUFFIX}.7z.001, .002, ...
+            # We don’t scan dist/; we just construct links based on expected names.
+            #
+            # If you know you always have at least .7z.001, you can link that,
+            # and tell users to download all parts from the Assets list.
 
-            if [[ ${#parts[@]} -eq 0 ]]; then
-              echo "::warning::No archive parts found for ${display}, skipping table row"
-              continue
-            fi
+            base_name="${MOD_PREFIX}${label}_${MOD_SUFFIX}"
 
-            links=""
-            for part in "${parts[@]}"; do
-              fname="$(basename "${part}")"
-              links+="[${fname}](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${fname})"
-            done
-            links="${links%}"
+            # Example: link to the first part; users are expected to grab all .7z.* parts.
+            fname="${base_name}.7z.001"
+            link="[Download ${display}](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${fname})"
 
-            device_table+="| ${display} | ${release_date} | ${links} |"$'\n'
+            device_table+="| ${display} | ${release_date} | ${link} |"$'\n'
           done
           device_table="${device_table%$'\n'}"
 
@@ -209,7 +180,6 @@ jobs:
             changelog_line=""
           fi
 
-          # Auto-generate Full Changelog link if user left it blank in whats-new.md
           if [[ -z "${changelog_line}" ]]; then
             prev_tag="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
             if [[ -n "${prev_tag}" ]]; then
@@ -225,16 +195,20 @@ jobs:
           template="${template//\{\{KNOWN_ISSUES\}\}/${known_issues}}"
           template="${template//\{\{CHANGELOG_LINE\}\}/${changelog_line}}"
 
-          printf '%s\n' "${template}" > dist/RELEASE_NOTES.md
+          printf '%s\n' "${template}" > RELEASE_NOTES.md
 
-      - name: Create / Update GitHub Release (attach files)
+          echo "=== Generated RELEASE_NOTES.md ==="
+          cat RELEASE_NOTES.md
+
+      # Update the existing release body only; do NOT upload files here.
+      - name: Update release body (finalize)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ADeUX ${{ github.ref_name }}
-          files: dist/*.7z.*
-          body_path: ${{ matrix.variant == 'R36S' && 'dist/RELEASE_NOTES.md' || '' }}
-          draft: false
+          body_path: RELEASE_NOTES.md
+          draft: false  # publish the release now that all assets are attached
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+          # No `files` field: we’re only updating the body, not re-uploading assets.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
