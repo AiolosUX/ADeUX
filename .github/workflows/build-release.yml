@@ -126,7 +126,6 @@ jobs:
             label="${vlabel:-${vname}}"
             display="${vdisplay:-${label//_/ / }}"
             base_name="${MOD_PREFIX}${label}_${MOD_SUFFIX}"
-            links=""
 
             shopt -s nullglob
             assets=(dist/"${base_name}".img.7z.*)
@@ -139,20 +138,20 @@ jobs:
               exit 1
             fi
 
+            links="<div>"
+
             for asset_path in "${assets[@]}"; do
               [[ -f "${asset_path}" ]] || continue
 
               fname="$(basename "${asset_path}")"
               url="${release_url}/${fname}"
 
-              # Two spaces followed by a newline create a Markdown line break,
-              # putting each split archive part below the previous one.
-              links+="[${fname}](${url})  "
-              links+=$'\n'
+              # Keep every archive link inside the same table cell.
+              links+="[${fname}](${url})<br>"
             done
 
-            links="${links%$'\n'}"
-            links="${links%  }"
+            links="${links%<br>}"
+            links+="</div>"
 
             device_table+="| ${display} | ${release_date} | ${links} |"$'\n'
           done
