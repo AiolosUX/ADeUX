@@ -1,0 +1,36 @@
+# Keep text files using LF line endings
+* text=auto eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+
+# Configuration / source files
+*.conf text eol=lf
+*.cfg text eol=lf
+*.env text eol=lf
+*.ini text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.xml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+
+# GitHub files
+.github/* text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.bmp binary
+*.ico binary
+*.zip binary
+*.gz binary
+*.xz binary
+*.7z binary
+*.tar binary
+*.img binary
+*.iso binary

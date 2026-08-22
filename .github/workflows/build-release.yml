@@ -1,0 +1,240 @@
+name: Build and Release ADeUX
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build:
+    name: Build ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - R36S
+          - R36SPlus
+          - R45H
+
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+          p7zip-full \
+          curl \
+          gdisk \
+          dosfstools \
+          unzip \
+          btrfs-progs \
+          parted
+
+      - name: Build modded image
+        run: sudo bash scripts/build-all.sh --variant "${{ matrix.variant }}"
+
+      - name: Check for leftover raw images
+        run: |
+          if ls dist/*.img >/dev/null 2>&1; then
+            echo "::warning::Raw .img still present in dist/ for ${{ matrix.variant }} — compress step may have been skipped"
+            ls -lh dist/*.img
+          fi
+
+      - name: Upload ${{ matrix.variant }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: darkos-${{ matrix.variant }}-7z
+          path: dist/*.7z.*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Release ${{ matrix.variant }}
+    needs: build
+    if: always() && needs.build.result == 'success' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - R36S
+          - R36SPlus
+          - R45H
+
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download ${{ matrix.variant }} artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: darkos-${{ matrix.variant }}-7z
+          path: dist
+
+      - name: List downloaded artifacts
+        run: |
+          echo "=== dist contents ==="
+          ls -lh dist/
+          echo "=== disk space ==="
+          df -h /
+
+      # Only the first variant generates the release notes and body.
+      # Other variants will just attach their files to the same release.
+      - name: Write release notes (first variant only)
+        if: matrix.variant == 'R36S'
+        run: |
+          source config.env
+
+          release_date="$(date -u +%Y/%m/%d)"
+
+          device_table=""
+          for entry in "${MOD_VARIANTS[@]}"; do
+            IFS=':' read -r vname vdtb vlabel vdisplay <<< "${entry}"
+            label="${vlabel:-${vname}}"
+            display="${vdisplay:-${label//_/ / }}"
+
+            shopt -s nullglob
+            parts=( dist/"${MOD_PREFIX}${label}_${MOD_SUFFIX}".7z.* )
+            shopt -u nullglob
+
+            if [[ ${#parts[@]} -eq 0 ]]; then
+              echo "::warning::No archive parts found for ${display}, skipping table row"
+              continue
+            fi
+
+            links=""
+            for part in "${parts[@]}"; do
+              fname="$(basename "${part}")"
+              links+="[${fname}](https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${fname})"
+            done
+            links="${links%}"
+
+            device_table+="| ${display} | ${release_date} | ${links} |"$'\n'
+          done
+          device_table="${device_table%$'\n'}"
+
+          new_features_default="- **Placeholder:** New features introduced in this release.
+          - **Placeholder:** Newly supported hardware or functionality.
+          - **Placeholder:** Major changes."
+
+          improvements_default="- **Placeholder:** Performance and stability improvements.
+          - **Placeholder:** Hardware-specific improvements.
+          - **Placeholder:** System and configuration improvements."
+
+          bug_fixes_default="- **Placeholder:** Fixes included in this release.
+          - **Placeholder:** Device-specific fixes.
+          - **Placeholder:** Other resolved issues."
+
+          known_issues_default="- **Placeholder:** Known issues for this release.
+          - **Placeholder:** Device-specific limitations.
+          - **Placeholder:** Other issues users should be aware of."
+
+          declare -A wn=( [NEW_FEATURES]="" [IMPROVEMENTS]="" [BUG_FIXES]="" [KNOWN_ISSUES]="" [CHANGELOG]="" )
+
+          whats_new_file=".github/whats-new.md"
+          if [[ -f "${whats_new_file}" ]]; then
+            current=""
+            while IFS= read -r line || [[ -n "${line}" ]]; do
+              key="$(printf '%s' "${line}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[[:space:]]+$//; s/:$//')"
+              case "${key}" in
+                "new features") current=NEW_FEATURES; continue ;;
+                "improvements"|"updates") current=IMPROVEMENTS; continue ;;
+                "bug fixes") current=BUG_FIXES; continue ;;
+                "known issues") current=KNOWN_ISSUES; continue ;;
+              esac
+              if [[ "${key}" == "full changelog"* ]]; then
+                current=CHANGELOG
+                wn[${current}]+="${line}"$'\n'
+                continue
+              fi
+              if [[ -n "${current}" ]]; then
+                wn[${current}]+="${line}"$'\n'
+              fi
+            done < "${whats_new_file}"
+          fi
+
+          for key in "${!wn[@]}"; do
+            wn[${key}]="$(printf '%s' "${wn[${key}]}" | sed -e '/^[[:space:]]*$/d' -e '/^\*[[:space:]]*$/d')"
+          done
+
+          new_features="${wn[NEW_FEATURES]:-${new_features_default}}"
+          improvements="${wn[IMPROVEMENTS]:-${improvements_default}}"
+          bug_fixes="${wn[BUG_FIXES]:-${bug_fixes_default}}"
+          known_issues="${wn[KNOWN_ISSUES]:-${known_issues_default}}"
+          changelog_line="${wn[CHANGELOG]}"
+          changelog_stripped="$(printf '%s' "${changelog_line}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          if [[ "${changelog_stripped}" == "fullchangelog:" || -z "${changelog_stripped}" ]]; then
+            changelog_line=""
+          fi
+
+          # Auto-generate Full Changelog link if user left it blank in whats-new.md
+          if [[ -z "${changelog_line}" ]]; then
+            prev_tag="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+            if [[ -n "${prev_tag}" ]]; then
+              changelog_line="**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${prev_tag}...${GITHUB_REF_NAME}"
+            fi
+          fi
+
+          template="$(cat .github/release-notes.md)"
+          template="${template//\{\{DEVICE_TABLE\}\}/${device_table}}"
+          template="${template//\{\{NEW_FEATURES\}\}/${new_features}}"
+          template="${template//\{\{IMPROVEMENTS\}\}/${improvements}}"
+          template="${template//\{\{BUG_FIXES\}\}/${bug_fixes}}"
+          template="${template//\{\{KNOWN_ISSUES\}\}/${known_issues}}"
+          template="${template//\{\{CHANGELOG_LINE\}\}/${changelog_line}}"
+
+          printf '%s\n' "${template}" > dist/RELEASE_NOTES.md
+
+      - name: Create / Update GitHub Release (attach files)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ADeUX ${{ github.ref_name }}
+          files: dist/*.7z.*
+          body_path: ${{ matrix.variant == 'R36S' && 'dist/RELEASE_NOTES.md' || '' }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
