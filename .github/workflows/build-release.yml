@@ -144,10 +144,17 @@ jobs:
 
               fname="$(basename "${asset_path}")"
               url="${release_url}/${fname}"
-              links+="[${fname}](${url}) "
+
+              # Two spaces followed by a newline create a Markdown line break,
+              # putting each split archive part below the previous one.
+              links+="[${fname}](${url})  "
+              links+=$'\n'
             done
 
-            device_table+="| ${display} | ${release_date} | ${links% } |"$'\n'
+            links="${links%$'\n'}"
+            links="${links%  }"
+
+            device_table+="| ${display} | ${release_date} | ${links} |"$'\n'
           done
 
           device_table="${device_table%$'\n'}"
