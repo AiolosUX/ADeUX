@@ -140,10 +140,11 @@ jobs:
             fi
 
             for asset_path in "${assets[@]}"; do
+              [[ -f "${asset_path}" ]] || continue
+
               fname="$(basename "${asset_path}")"
               url="${release_url}/${fname}"
-              part="${fname##*.7z.}"
-              links+="[.${part}](${url}) "
+              links+="[${fname}](${url}) "
             done
 
             device_table+="| ${display} | ${release_date} | ${links% } |"$'\n'
