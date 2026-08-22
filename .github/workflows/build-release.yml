@@ -48,13 +48,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-          p7zip-full \
-          curl \
-          gdisk \
-          dosfstools \
-          unzip \
-          btrfs-progs \
-          parted
+            p7zip-full \
+            curl \
+            gdisk \
+            dosfstools \
+            unzip \
+            btrfs-progs \
+            parted
 
       - name: Build modded image
         run: sudo bash scripts/build-all.sh --variant "${{ matrix.variant }}"
@@ -182,13 +182,15 @@ jobs:
           if [[ -n "${improvements}" ]]; then
             template="${template//\{\{IMPROVEMENTS\}\}/${improvements}}"
           else
-            template="$(printf '%s' "${template}" | sed '/### Improvements/,/^$/d')"
+            # Delete from "### Improvements" through the line containing {{IMPROVEMENTS}}
+            template="$(printf '%s' "${template}" | sed '/### Improvements/,/{{IMPROVEMENTS}}/d')"
           fi
 
           if [[ -n "${bug_fixes}" ]]; then
             template="${template//\{\{BUG_FIXES\}\}/${bug_fixes}}"
           else
-            template="$(printf '%s' "${template}" | sed '/### Bug Fixes/,/^$/d')"
+            # Delete from "### Bug Fixes" through the line containing {{BUG_FIXES}}
+            template="$(printf '%s' "${template}" | sed '/### Bug Fixes/,/{{BUG_FIXES}}/d')"
           fi
 
           if [[ -n "${known_issues}" ]]; then
