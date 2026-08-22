@@ -4,11 +4,12 @@
 -->
 
 New Features
-- TEST FEATURES
+- Added support for R33S, R35S, R36S, R36S Plus, R36H, R45H, R46H, and R42 Pro.
+- Initial release establishing baseline parity with upstream dArkOS, serving as the foundation for future device-specific configurations and feature updates.
 Improvements
 
 Bug Fixes
-- TEST BUGS
+
 Known Issues
 
 Full Changelog
