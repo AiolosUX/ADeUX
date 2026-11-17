@@ -115,6 +115,13 @@ patch_boot_console_ini() {
   echo "[mod] replacing boot.ini"
   cp -f "${boot_ini_path}" "${boot_mnt}/boot.ini"
 
+  local screenfiles_path="${VARIANT_CONSOLE_DIR}/ScreenFiles"
+  if [[ -d "${screenfiles_path}" ]]; then
+    echo "[mod] installing ScreenFiles"
+    mkdir -p "${boot_mnt}/ScreenFiles"
+    cp -a "${screenfiles_path}/." "${boot_mnt}/ScreenFiles/"
+  fi
+
   if [[ -n "${UPSTREAM_DTB:-}" \
     && "${UPSTREAM_DTB}" != "${VARIANT_DTB}" \
     && "${UPSTREAM_DTB}" != "rg351mp-uboot.dtb" \
