@@ -11,6 +11,36 @@ source "${REPO_ROOT}/config.env"
 # shellcheck source=lib-variants.sh
 source "${SCRIPT_DIR}/lib-variants.sh"
 
+# Cleanup state lives at script level so the EXIT trap can always see it,
+# even when set -e aborts the script from inside a function.
+loop_dev=""
+boot_mnt=""
+root_mnt=""
+
+cleanup() {
+  set +e
+  sync
+
+  if [[ -n "${boot_mnt:-}" ]]; then
+    if mountpoint -q "${boot_mnt}"; then
+      umount "${boot_mnt}" 2>/dev/null || umount -l "${boot_mnt}"
+    fi
+    rmdir "${boot_mnt}" 2>/dev/null
+  fi
+
+  if [[ -n "${root_mnt:-}" ]]; then
+    if mountpoint -q "${root_mnt}"; then
+      umount "${root_mnt}" 2>/dev/null || umount -l "${root_mnt}"
+    fi
+    rmdir "${root_mnt}" 2>/dev/null
+  fi
+
+  if [[ -n "${loop_dev:-}" ]]; then
+    losetup -d "${loop_dev}" 2>/dev/null
+  fi
+}
+trap cleanup EXIT
+
 part_path() {
   local disk="$1" part="$2"
 
@@ -46,12 +76,12 @@ wait_for_block() {
 
 setup_loop_image() {
   local image="$1"
-  local loop_dev
+  local dev
 
-  loop_dev="$(losetup --find --show --partscan "${image}")"
-  partprobe "${loop_dev}" 2>/dev/null || true
+  dev="$(losetup --find --show --partscan "${image}")"
+  partprobe "${dev}" 2>/dev/null || true
   udevadm settle 2>/dev/null || true
-  echo "${loop_dev}"
+  echo "${dev}"
 }
 
 usage() {
@@ -119,7 +149,9 @@ patch_boot_console_ini() {
   if [[ -d "${screenfiles_path}" ]]; then
     echo "[mod] installing ScreenFiles"
     mkdir -p "${boot_mnt}/ScreenFiles"
-    cp -a "${screenfiles_path}/." "${boot_mnt}/ScreenFiles/"
+    # FAT has no Unix ownership/permissions, so copy without preserving them.
+    cp -rT --no-preserve=mode,ownership,timestamps \
+      "${screenfiles_path}" "${boot_mnt}/ScreenFiles"
   fi
 
   if [[ -n "${UPSTREAM_DTB:-}" \
@@ -201,22 +233,8 @@ main() {
   mkdir -p "$(dirname "${output}")"
   cp --reflink=auto "${input}" "${output}" 2>/dev/null || cp "${input}" "${output}"
 
-  local loop_dev=""
-  local boot_mnt=""
-  local root_mnt=""
   local boot_dev=""
   local root_dev=""
-
-  cleanup() {
-    set +e
-    sync
-    [[ -n "${boot_mnt}" ]] && mountpoint -q "${boot_mnt}" && umount "${boot_mnt}"
-    [[ -n "${root_mnt}" ]] && mountpoint -q "${root_mnt}" && umount "${root_mnt}"
-    [[ -n "${boot_mnt}" && -d "${boot_mnt}" ]] && rmdir "${boot_mnt}"
-    [[ -n "${root_mnt}" && -d "${root_mnt}" ]] && rmdir "${root_mnt}"
-    [[ -n "${loop_dev}" ]] && losetup -d "${loop_dev}" 2>/dev/null
-  }
-  trap cleanup EXIT
 
   loop_dev="$(setup_loop_image "${output}")"
   boot_dev="$(part_path "${loop_dev}" "${BOOT_PART}")"
